@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Haunted Manors 3D - Chibi Co-op Horror</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+        body { background-color: #030305; color: #fff; font-family: 'Courier New', Courier, monospace; overflow: hidden; width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; }
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+        #ui-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; padding: 20px; }
+        .hud-panel { background: rgba(0, 0, 0, 0.7); border: 1px solid #444; padding: 10px 18px; border-radius: 6px; font-size: 15px; color: #eee; text-shadow: 1px 1px 2px #000; pointer-events: auto; }
+        #lobby-menu { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(8, 8, 12, 0.96); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 10; pointer-events: auto; }
+        h1 { color: #b22222; font-size: 42px; text-transform: uppercase; letter-spacing: 5px; margin-bottom: 8px; text-shadow: 0 0 15px #ff0000; }
+        p.subtitle { color: #888; margin-bottom: 35px; font-size: 15px; letter-spacing: 1px; }
+        .btn { background: #151518; color: #d1d1d1; border: 1px solid #555; padding: 14px 28px; margin: 10px; font-family: inherit; font-size: 16px; cursor: pointer; transition: all 0.2s; min-width: 220px; border-radius: 4px; }
+        .btn:hover { background: #b22222; color: #fff; border-color: #ff0000; box-shadow: 0 0 15px #ff0000; }
+        input[type="text"] { background: #111; border: 1px solid #555; color: #00ffcc; padding: 14px; font-family: inherit; font-size: 18px; text-align: center; margin-bottom: 15px; width: 24px; border-radius: 4px; text-transform: uppercase; letter-spacing: 3px; }
+        #room-code-display { font-size: 28px; color: #00ffcc; letter-spacing: 4px; font-weight: bold; margin: 15px 0; text-shadow: 0 0 10px #00ffcc; }
+    </style>
+    <!-- Thư viện Three.js cho đồ họa 3D -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- Thư viện PeerJS cho kết nối P2P 2 người chơi -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+</head>
+<body>
+
+<div id="canvas-container"></div>
+
+<div id="ui-overlay">
+    <div style="display: flex; justify-content: space-between;">
+        <div class="hud-panel">VẬT PHẨM: <span id="items-count" style="color: #ffd700; font-weight: bold;">0/4</span></div>
+        <div class="hud-panel">TẦNG: <span id="floor-display" style="color: #00ffff; font-weight: bold;">1</span></div>
+    </div>
+    <div class="hud-panel" style="align-self: center; background: rgba(0,0,0,0.85); text-align: center;">
+        [W A S D] Di chuyển | [Shift] Chạy nhanh | [F] Đèn pin | [E] Lên/Xuống Cầu Thang & Nhặt đồ
+    </div>
+</div>
+
+<div id="lobby-menu">
+    <h1>NHÀ MA 3D CHIBI</h1>
+    <p class="subtitle">CO-OP 2 NGƯỜI THÁM HIỂM CĂN NHÀ U ÁM</p>
+    
+    <div id="menu-initial">
+        <button class="btn" onclick="hostGame()">TẠO PHÒNG (HOST)</button><br>
+        <button class="btn" onclick="showJoinInput()">THAM GIA (JOIN)</button>
+    </div>
+
+    <div id="menu-join" style="display: none;">
+        <input type="text" id="join-code-input" placeholder="MÃ PHÒNG" maxlength="5">
+        <br>
+        <button class="btn" onclick="joinGame()">KẾT NỐI NGAY</button>
+        <button class="btn" style="border-color: #444;" onclick="resetMenu()">QUAY LẠI</button>
+    </div>
+
+    <div id="menu-waiting" style="display: none; text-align: center;">
+        <p>MÃ PHÒNG CỦA BẠN:</p>
+        <div id="room-code-display">----</div>
+        <p style="color: #aaa; font-size: 13px;">Gửi mã này cho bạn của bạn để cùng vào chơi!</p>
+    </div>
+</div>
+
+<script>
+    // --- KHỞI TẠO THREE.JS 3D ---
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x050508);
+    scene.fog = new THREE.FogExp2(0x050508, 0.035);
+
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    container.appendChild(renderer.domElement);
+
+    // Ánh sáng môi trường tối tăm rợn ngợp
+    const ambientLight = new THREE.AmbientLight(0x111122, 0.4);
+    scene.add(ambientLight);
+
+    // --- TẠO MÔ HƯỜNG CĂN NHÀ 2 TẦNG ---
+    const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x221a15, roughness: 0.8 });
+    const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x3a3530, roughness: 0.9 });
+    const stairMaterial = new THREE.MeshStandardMaterial({ color: 0x5c4033 });
+
+    // Sàn Tầng 1 & Tầng 2
+    const floor1 = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), floorMaterial);
+    floor1.rotation.x = -Math.PI / 2;
+    scene.add(floor1);
+
+    const floor2 = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), floorMaterial);
+    floor2.rotation.x = -Math.PI / 2;
+    floor2.position.y = 6;
+    scene.add(floor2);
+
+    // Cầu thang thông tầng
+    const stairs = new THREE.Mesh(new THREE.BoxGeometry(3, 6, 6), stairMaterial);
+    stairs.position.set(10, 3, 0);
+    scene.add(stairs);
+
+    // Tường bao quanh căn nhà
+    const wall1 = new THREE.Mesh(new THREE.BoxGeometry(30, 6, 1), wallMaterial);
+    wall1.position.set(0, 3, -15);
+    scene.add(wall1);
+    const wall2 = new THREE.Mesh(new THREE.BoxGeometry(1, 6, 30), wallMaterial);
+    wall2.position.set(-15, 3, 0);
+    scene.add(wall2);
+
+    // --- HÀM TẠO NHÂN VẬT CHIBI 3D ---
+    function createChibiAvatar(colorHex) {
+        const chibiGroup = new THREE.Group();
+        
+        // Thân chibi (nhỏ)
+        const bodyGeo = new THREE.BoxGeometry(0.8, 1.0, 0.5);
+        const bodyMat = new THREE.MeshStandardMaterial({ color: colorHex });
+        const body = new THREE.Mesh(bodyGeo, bodyMat);
+        body.position.y = 0.8;
+        chibiGroup.add(body);
+
+        // Đầu chibi (to - đặc trưng chibi)
+        const headGeo = new THREE.BoxGeometry(1.2, 1.2, 1.2);
+        const headMat = new THREE.MeshStandardMaterial({ color: 0xffdbac }); // Màu da
+        const head = new THREE.Mesh(headGeo, headMat);
+        head.position.y = 1.8;
+        chibiGroup.add(head);
+
+        // Đèn pin gắn trên người nhân vật
+        const flashlight = new THREE.PointLight(0xffffee, 1.5, 12);
+        flashlight.position.set(0, 1.8, 0.8);
+        chibiGroup.add(flashlight);
+        chibiGroup.userData.flashlight = flashlight;
+
+        return chibiGroup;
+    }
+
+    // --- MẠNG P2P & GAME STATE ---
+    let peer = null;
+    let conn = null;
+    let isHost = false;
+    let myRole = 'p1';
+
+    let gameState = {
+        players: {
+            p1: { x: 0, z: 5, floor: 1, light: true, rot: 0 },
+            p2: { x: 2, z: 5, floor: 1, light: true, rot: 0 }
+        },
+        items: [
+            { id: 1, x: -8, z: -8, floor: 1, taken: false },
+            { id: 2, x: 8, z: -8, floor: 2, taken: false },
+            { id: 3, x: -8, z: 8, floor: 1, taken: false },
+            { id: 4, x: 8, z: 8, floor: 2, taken: false }
+        ]
+    };
+
+    // Render nhân vật 3D cho P1 và P2
+    const avatarP1 = createChibiAvatar(0x00ffff); // Xanh dương
+    const avatarP2 = createChibiAvatar(0xff00ff); // Hồng tím
+    scene.add(avatarP1);
+    scene.add(avatarP2);
+
+    // Vật phẩm 3D trong không gian
+    const itemMeshes = [];
+    gameState.items.forEach(item => {
+        const itemGeo = new THREE.SphereGeometry(0.4, 16, 16);
+        const itemMat = new THREE.MeshStandardMaterial({ color: 0xffd700, emissive: 0xaa8800 });
+        const mesh = new THREE.Mesh(itemGeo, itemMat);
+        mesh.position.set(item.x, item.floor === 1 ? 0.4 : 6.4, item.z);
+        scene.add(mesh);
+        itemMeshes.push({ id: item.id, mesh: mesh });
+    });
+
+    let keys = {};
+    window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+    window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+    function initPeer() {
+        const code = Math.random().toString(36).substring(2, 7).toUpperCase();
+        peer = new Peer('HM3D-' + code);
+        return code;
+    }
+
+    function hostGame() {
+        isHost = true;
+        myRole = 'p1';
+        const code = initPeer();
+        document.getElementById('menu-initial').style.display = 'none';
+        document.getElementById('menu-waiting').style.display = 'block';
+        document.getElementById('room-code-display').innerText = code;
+
+        peer.on('connection', c => {
+            conn = c;
+            setupConnection();
+            document.getElementById('lobby-menu').style.display = 'none';
+        });
+    }
+
+    function showJoinInput() {
+        document.getElementById('menu-initial').style.display = 'none';
+        document.getElementById('menu-join').style.display = 'block';
+    }
+
+    function resetMenu() {
+        document.getElementById('menu-join').style.display = 'none';
+        document.getElementById('menu-initial').style.display = 'block';
+    }
+
+    function joinGame() {
+        const code = document.getElementById('join-code-input').value.trim().toUpperCase();
+        if (!code) return;
+        myRole = 'p2';
+        peer = new Peer();
+        
+        peer.on('open', () => {
+            conn = peer.connect('HM3D-' + code);
+            setupConnection();
+        });
+    }
+
+    function setupConnection() {
+        conn.on('open', () => {
+            document.getElementById('lobby-menu').style.display = 'none';
+            renderer.setAnimationLoop(gameLoop);
+        });
+
+        conn.on('data', data => {
+            if (isHost) {
+                if (data.type === 'player_update') {
+                    gameState.players.p2 = data.player;
+                    gameState.items = data.items;
+                }
+            } else {
+                if (data.type === 'sync') {
+                    gameState = data.state;
+                }
+            }
+        });
+    }
+
+    // --- VÒNG LẶP CẬP NHẬT GAME ---
+    function update() {
+        const me = gameState.players[myRole];
+        if (!me) return;
+
+        let speed = keys['shift'] ? 0.12 : 0.07;
+
+        if (keys['w']) { me.z -= speed; me.rot = Math.PI; }
+        if (keys['s']) { me.z += speed; me.rot = 0; }
+        if (keys['a']) { me.x -= speed; me.rot = -Math.PI / 2; }
+        if (keys['d']) { me.x += speed; me.rot = Math.PI / 2; }
+
+        // Giới hạn biên trong nhà
+        me.x = Math.max(-13, Math.min(13, me.x));
+        me.z = Math.max(-13, Math.min(13, me.z));
+
+        // Bật/Tắt đèn pin bằng phím F
+        if (keys['f'] && !keys['f_lock']) {
+            me.light = !me.light;
+            keys['f_lock'] = true;
+        }
+        if (!keys['f']) keys['f_lock'] = false;
+
+        // Cầu thang lên xuống lầu (Khu vực X từ 8 đến 12, Z từ -2 đến 2)
+        if (me.x > 8 && me.x < 12 && me.z > -2 && me.z < 2) {
+            if (keys['e'] && !keys['e_lock']) {
+                me.floor = me.floor === 1 ? 2 : 1;
+                me.y = me.floor === 1 ? 0 : 6;
+                document.getElementById('floor-display').innerText = me.floor;
+                keys['e_lock'] = true;
+            }
+        }
+        if (!keys['e']) keys['e_lock'] = false;
+
+        // Nhặt vật phẩm bằng phím E
+        gameState.items.forEach(item => {
+            if (!item.taken && item.floor === me.floor) {
+                let dist = Math.hypot(me.x - item.x, me.z - item.z);
+                if (dist < 1.5 && keys['e']) {
+                    item.taken = true;
+                }
+            }
+        });
+
+        // Cập nhật giao diện đếm item
+        let collected = gameState.items.filter(i => i.taken).length;
+        document.getElementById('items-count').innerText = collected + "/4";
+
+        // Đồng bộ mạng P2P
+        if (conn && conn.open) {
+            if (isHost) {
+                conn.send({ type: 'sync', state: gameState });
+            } else {
+                conn.send({ type: 'player_update', player: me, items: gameState.items });
+            }
+        }
+    }
+
+    // --- RENDER HÌNH ẢNH 3D ---
+    function renderScene() {
+        // Cập nhật vị trí nhân vật P1 trên không gian 3D
+        avatarP1.position.set(gameState.players.p1.x, gameState.players.p1.floor === 1 ? 0 : 6, gameState.players.p1.z);
+        avatarP1.rotation.y = gameState.players.p1.rot;
+        avatarP1.userData.flashlight.visible = gameState.players.p1.light;
+
+        // Cập nhật vị trí nhân vật P2 trên không gian 3D
+        avatarP2.position.set(gameState.players.p2.x, gameState.players.p2.floor === 1 ? 0 : 6, gameState.players.p2.z);
+        avatarP2.rotation.y = gameState.players.p2.rot;
+        avatarP2.userData.flashlight.visible = gameState.players.p2.light;
+
+        // Hiển thị/Ẩn vật phẩm theo trạng thái
+        gameState.items.forEach((item, index) => {
+            const m = itemMeshes[index];
+            if (m) {
+                m.mesh.visible = !item.taken && item.floor === (gameState.players[myRole].floor);
+            }
+        });
+
+        // Camera đi theo góc nhìn phía sau nhân vật của mình
+        const myData = gameState.players[myRole];
+        const targetX = myData.x;
+        const targetY = (myData.floor === 1 ? 0 : 6) + 3;
+        const targetZ = myData.z + 5;
+
+        camera.position.set(targetX, targetY, targetZ);
+        camera.lookAt(myData.x, myData.floor === 1 ? 0 : 6, myData.z);
+
+        renderer.render(scene, camera);
+    }
+
+    function gameLoop() {
+        update();
+        renderScene();
+    }
+</script>
+</body>
+</html>
